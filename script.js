@@ -6,6 +6,7 @@ let cart = [];
 let walletBalance = 500.00;
 let activeFilters = new Set(['all']); 
 let currentView = 'customer';
+let currentSort = 'popularity';
 
 // Carousel State
 let trendingItems = [];
@@ -103,10 +104,18 @@ function toggleFilter(filter) {
         if (activeFilters.size === 0) activeFilters.add('all');
     }
 
-    document.querySelectorAll('.filter-btn').forEach(btn => {
+    // Update desktop filters
+    document.querySelectorAll('#filter-container .filter-btn').forEach(btn => {
         btn.classList.remove('active');
         const btnType = btn.id.replace('btn-', '');
         if (activeFilters.has(btnType)) btn.classList.add('active');
+    });
+
+    // Update mobile filters
+    document.querySelectorAll('#mobile-filter-menu .filter-option').forEach(option => {
+        option.classList.remove('active');
+        const optionFilter = option.id.replace('mobile-btn-', '');
+        if (activeFilters.has(optionFilter)) option.classList.add('active');
     });
 
     renderMenu();
@@ -139,15 +148,21 @@ function renderMenu() {
     const grid = document.getElementById('menu-grid');
     grid.innerHTML = '';
 
-    const filtered = menuItems.filter(item => {
+    let filtered = menuItems.filter(item => {
         if (activeFilters.has('all')) return true;
-        let matches = true;
-        if (activeFilters.has('veg') && !item.veg) matches = false;
-        if (activeFilters.has('nonveg') && item.veg) matches = false;
-        if (activeFilters.has('spicy') && item.spicy < 2) matches = false;
-        if (activeFilters.has('drinks') && item.category !== 'drinks' && item.category !== 'extras') matches = false;
+        let matches = false;
+        
+        if (activeFilters.has('veg') && item.veg) matches = true;
+        if (activeFilters.has('nonveg') && !item.veg) matches = true;
+        if (activeFilters.has('spicy') && item.spicy >= 2) matches = true;
+        if (activeFilters.has('budget') && item.price <= 100) matches = true;
+        if (activeFilters.has('lowcal') && item.cal <= 300) matches = true;
+        
         return matches;
     });
+
+    // Apply sorting
+    filtered = applySorting(filtered);
 
     filtered.forEach(item => {
         let spiceIcons = '🌶️'.repeat(item.spicy);
@@ -190,6 +205,71 @@ function renderMenu() {
         `;
         grid.appendChild(card);
     });
+}
+
+// --- SORTING LOGIC ---
+function applySorting(items) {
+    const sorted = [...items];
+    
+    switch(currentSort) {
+        case 'popularity':
+            // Sort by trending (random with weighted bias towards beginning)
+            sorted.sort(() => Math.random() - 0.4);
+            break;
+        case 'price-low':
+            sorted.sort((a, b) => a.price - b.price);
+            break;
+        case 'price-high':
+            sorted.sort((a, b) => b.price - a.price);
+            break;
+        case 'fastest':
+            // Parse time and sort (assumes format like "15 min")
+            sorted.sort((a, b) => {
+                const timeA = parseInt(a.time);
+                const timeB = parseInt(b.time);
+                return timeA - timeB;
+            });
+            break;
+        case 'rating':
+            // Sort by rating (higher first)
+            sorted.sort((a, b) => (b.rating || 4.5) - (a.rating || 4.5));
+            break;
+        default:
+            break;
+    }
+    
+    return sorted;
+}
+
+function setSort(sortType) {
+    currentSort = sortType;
+    
+    // Update UI - highlight active option and update label
+    document.querySelectorAll('.sort-option').forEach(option => {
+        if (option.dataset.sort === sortType) {
+            option.classList.add('active');
+        } else {
+            option.classList.remove('active');
+        }
+    });
+    
+    // Update button label and icon
+    const sortLabelMap = {
+        'popularity': { icon: 'fa-fire', label: 'Trending' },
+        'price-low': { icon: 'fa-arrow-up-short-wide', label: 'Price: Low to High' },
+        'price-high': { icon: 'fa-arrow-down-wide-short', label: 'Price: High to Low' },
+        'fastest': { icon: 'fa-bolt', label: 'Fastest Delivery' },
+        'rating': { icon: 'fa-star', label: 'Top Rated' }
+    };
+    
+    const sortInfo = sortLabelMap[sortType];
+    const btn = document.getElementById('sort-dropdown-btn');
+    const label = document.getElementById('sort-label');
+    
+    label.textContent = sortInfo.label;
+    btn.querySelector('i:first-child').className = `fa-solid ${sortInfo.icon}`;
+    
+    renderMenu();
 }
 
 // --- MODAL LOGIC ---
@@ -358,7 +438,86 @@ function setupEventListeners() {
     document.getElementById('close-cart-btn').addEventListener('click', () => toggleCart());
     document.getElementById('overlay').addEventListener('click', () => toggleCart());
     document.getElementById('checkout-btn').addEventListener('click', checkout);
-    document.getElementById('search-input').addEventListener('input', (e) => fetchMenu(e.target.value));
+    
+    // Search with debouncing and dropdown
+    const searchInput = document.getElementById('search-input');
+    let searchTimeout;
+    
+    searchInput.addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        const query = e.target.value.trim();
+        
+        searchTimeout = setTimeout(() => {
+            if (query.length > 0) {
+                updateSearchDropdown(query);
+            } else {
+                hideSearchDropdown();
+            }
+            fetchMenu(query);
+        }, 300);
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#search-input') && !e.target.closest('#search-dropdown')) {
+            hideSearchDropdown();
+        }
+    });
+    
+    // Open dropdown on focus if there's a query
+    searchInput.addEventListener('focus', () => {
+        if (searchInput.value.trim().length > 0) {
+            document.getElementById('search-dropdown').classList.remove('hidden');
+        }
+    });
+    
+    // Sort dropdown toggle
+    const sortDropdownBtn = document.getElementById('sort-dropdown-btn');
+    const sortDropdownMenu = document.getElementById('sort-dropdown-menu');
+    
+    sortDropdownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sortDropdownMenu.classList.toggle('hidden');
+    });
+    
+    // Close sort dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#sort-dropdown-btn') && !e.target.closest('#sort-dropdown-menu')) {
+            sortDropdownMenu.classList.add('hidden');
+        }
+    });
+    
+    // Close sort dropdown when an option is selected
+    document.querySelectorAll('.sort-option').forEach(option => {
+        option.addEventListener('click', () => {
+            sortDropdownMenu.classList.add('hidden');
+        });
+    });
+    
+    // Mobile filter button toggle
+    const mobileFilterBtn = document.getElementById('mobile-filter-btn');
+    const mobileFilterMenu = document.getElementById('mobile-filter-menu');
+    
+    if (mobileFilterBtn) {
+        mobileFilterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            mobileFilterMenu.classList.toggle('hidden');
+        });
+    }
+    
+    // Close mobile filter menu when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#mobile-filter-btn') && !e.target.closest('#mobile-filter-menu')) {
+            mobileFilterMenu.classList.add('hidden');
+        }
+    });
+    
+    // Close mobile filter menu when an option is selected
+    document.querySelectorAll('#mobile-filter-menu .filter-option').forEach(option => {
+        option.addEventListener('click', () => {
+            mobileFilterMenu.classList.add('hidden');
+        });
+    });
 }
 
 function updateWalletUI() { document.getElementById('wallet-balance').innerText = `₹${walletBalance.toFixed(2)}`; }
@@ -400,4 +559,54 @@ async function fetchOrders() {
 window.updateStatus = async (id, status) => {
     await fetch(`${API_URL}/orders/${id}`, { method: 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status})});
     fetchOrders();
+}
+
+// --- SEARCH DROPDOWN FUNCTIONS ---
+function updateSearchDropdown(query) {
+    const dropdown = document.getElementById('search-dropdown');
+    const suggestionsContainer = document.getElementById('search-suggestions');
+    
+    // Filter menu items based on query
+    const filtered = menuItems.filter(item =>
+        item.name.toLowerCase().includes(query.toLowerCase())
+    ).slice(0, 8); // Limit to 8 suggestions
+    
+    suggestionsContainer.innerHTML = '';
+    
+    if (filtered.length === 0) {
+        suggestionsContainer.innerHTML = `
+            <div class="search-no-results">
+                <div><i class="fa-solid fa-magnifying-glass"></i></div>
+                <div>No items found for "${query}"</div>
+            </div>
+        `;
+    } else {
+        filtered.forEach(item => {
+            const suggestion = document.createElement('div');
+            suggestion.className = 'search-suggestion-item';
+            suggestion.onclick = () => {
+                openItemDetails(item.id);
+                document.getElementById('search-input').value = '';
+                hideSearchDropdown();
+            };
+            
+            suggestion.innerHTML = `
+                <img src="${item.image}" alt="${item.name}">
+                <div class="search-suggestion-text">
+                    <div class="search-suggestion-name">${item.name}</div>
+                    <div class="search-suggestion-category">${item.category}</div>
+                </div>
+                <div class="search-suggestion-price">₹${item.price}</div>
+            `;
+            
+            suggestionsContainer.appendChild(suggestion);
+        });
+    }
+    
+    dropdown.classList.remove('hidden');
+}
+
+function hideSearchDropdown() {
+    const dropdown = document.getElementById('search-dropdown');
+    dropdown.classList.add('hidden');
 }
