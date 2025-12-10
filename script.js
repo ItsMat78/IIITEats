@@ -4,9 +4,10 @@ const API_URL = 'http://localhost:3000/api';
 let menuItems = [];
 let cart = [];
 let walletBalance = 500.00;
-let activeFilters = new Set(['all']); 
+let activeFilters = new Set(['all']);
 let currentView = 'customer';
 let currentSort = 'popularity';
+let currentUser = null; // Will store logged in user or guest
 
 // Carousel State
 let trendingItems = [];
@@ -14,11 +15,32 @@ let currentSlide = 0;
 let slideInterval;
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Check if user is logged in
+    const userData = localStorage.getItem('currentUser');
+    if (!userData) {
+        // Redirect to login page if not logged in
+        window.location.href = 'login.html';
+        return;
+    }
+
+    currentUser = JSON.parse(userData);
+
+    // Redirect admins to admin page
+    if (currentUser.isAdmin) {
+        window.location.href = 'admin.html';
+        return;
+    }
+
+    walletBalance = currentUser.walletBalance;
+
+    // Update UI with user info
+    updateUserUI();
+
     fetchMenu();
-    fetchOrders(); 
+    fetchOrders();
     updateWalletUI();
     setupEventListeners();
-    setInterval(fetchOrders, 5000); 
+    setInterval(fetchOrders, 5000);
 });
 
 // --- CAROUSEL LOGIC ---
@@ -393,7 +415,14 @@ async function checkout() {
         return;
     }
 
-    const payload = { userName: "student", total: total, items: cart };
+    // For guest users, show payment form (no autofill)
+    if (currentUser.isGuest) {
+        showGuestPaymentModal(total);
+        return;
+    }
+
+    // For logged-in users, process payment directly
+    const payload = { userName: currentUser.username, total: total, items: cart };
 
     try {
         const response = await fetch(`${API_URL}/orders`, {
@@ -406,18 +435,144 @@ async function checkout() {
 
         if (response.ok) {
             walletBalance -= total;
+            currentUser.walletBalance = walletBalance;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+            // Update wallet in database for logged-in users
+            if (!currentUser.isGuest) {
+                await fetch(`${API_URL}/users/${currentUser.username}/wallet`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: walletBalance })
+                });
+            }
+
             updateWalletUI();
             cart = [];
             updateCartUI();
             toggleCart();
             showToast(`Order Placed! ID: #${result.orderId}`);
-            fetchOrders(); 
+            fetchOrders();
         } else {
             showToast(`Order Failed: ${result.error}`, true);
         }
     } catch (err) {
         showToast("Connection Failed", true);
     }
+}
+
+function showGuestPaymentModal(total) {
+    // Create a payment modal for guest users
+    const modal = document.createElement('div');
+    modal.id = 'guest-payment-modal';
+    modal.className = 'fixed inset-0 z-[80] flex items-center justify-center px-4';
+    modal.innerHTML = `
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeGuestPaymentModal()"></div>
+        <div class="relative bg-slate-900 w-full max-w-md rounded-3xl overflow-hidden shadow-2xl border border-white/10 p-8 animate-fade-in">
+            <h2 class="text-2xl font-bold mb-4">Guest Payment</h2>
+            <p class="text-gray-400 mb-6">Please enter your payment details to complete the order.</p>
+
+            <form id="guest-payment-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-semibold mb-2 text-gray-300">Name</label>
+                    <input type="text" id="guest-name" placeholder="Enter your name" required
+                        class="w-full bg-slate-800/80 border border-white/10 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-orange-500 focus:bg-slate-800 transition" />
+                </div>
+
+                <div>
+                    <label class="block text-sm font-semibold mb-2 text-gray-300">Phone Number</label>
+                    <input type="tel" id="guest-phone" placeholder="Enter phone number" required pattern="[0-9]{10}"
+                        class="w-full bg-slate-800/80 border border-white/10 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-orange-500 focus:bg-slate-800 transition" />
+                </div>
+
+                <div>
+                    <label class="block text-sm font-semibold mb-2 text-gray-300">Payment Method</label>
+                    <select id="guest-payment-method"
+                        class="w-full bg-slate-800/80 border border-white/10 rounded-xl py-3 px-4 text-white focus:outline-none focus:border-orange-500 focus:bg-slate-800 transition">
+                        <option value="UPI">UPI</option>
+                        <option value="Card">Card</option>
+                        <option value="Cash">Cash on Delivery</option>
+                    </select>
+                </div>
+
+                <div class="pt-4 border-t border-white/10">
+                    <div class="flex justify-between items-center mb-4">
+                        <span class="text-gray-400">Total Amount:</span>
+                        <span class="text-2xl font-bold text-white">₹${total}</span>
+                    </div>
+
+                    <button type="submit"
+                        class="w-full py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 font-bold text-white shadow-lg hover:shadow-green-500/30 transition">
+                        Confirm Payment
+                    </button>
+
+                    <button type="button" onclick="closeGuestPaymentModal()"
+                        class="w-full mt-3 py-3 rounded-xl bg-white/5 border border-white/10 font-semibold text-gray-300 hover:bg-white/10 transition">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+
+            <button onclick="closeGuestPaymentModal()"
+                class="absolute top-4 right-4 text-gray-400 hover:text-white bg-black/20 hover:bg-black/50 w-8 h-8 rounded-full flex items-center justify-center transition">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Handle form submission
+    document.getElementById('guest-payment-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await processGuestPayment(total);
+    });
+}
+
+async function processGuestPayment(total) {
+    const name = document.getElementById('guest-name').value;
+    const phone = document.getElementById('guest-phone').value;
+    const paymentMethod = document.getElementById('guest-payment-method').value;
+
+    const payload = {
+        userName: 'guest',
+        total: total,
+        items: cart,
+        guestInfo: { name, phone, paymentMethod }
+    };
+
+    try {
+        const response = await fetch(`${API_URL}/orders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            walletBalance -= total;
+            currentUser.walletBalance = walletBalance;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+            updateWalletUI();
+            cart = [];
+            updateCartUI();
+            closeGuestPaymentModal();
+            toggleCart();
+            showToast(`Order Placed! ID: #${result.orderId}`);
+            fetchOrders();
+        } else {
+            showToast(`Order Failed: ${result.error}`, true);
+        }
+    } catch (err) {
+        showToast("Connection Failed", true);
+    }
+}
+
+window.closeGuestPaymentModal = function() {
+    const modal = document.getElementById('guest-payment-modal');
+    if (modal) modal.remove();
 }
 
 function showToast(msg, isError = false) {
@@ -430,10 +585,6 @@ function showToast(msg, isError = false) {
 }
 
 function setupEventListeners() {
-    document.getElementById('view-toggle-btn').addEventListener('click', () => {
-        document.getElementById('customer-view').classList.toggle('hidden');
-        document.getElementById('admin-view').classList.toggle('hidden');
-    });
     document.getElementById('cart-btn').addEventListener('click', () => toggleCart());
     document.getElementById('close-cart-btn').addEventListener('click', () => toggleCart());
     document.getElementById('overlay').addEventListener('click', () => toggleCart());
@@ -520,40 +671,150 @@ function setupEventListeners() {
     });
 }
 
-function updateWalletUI() { document.getElementById('wallet-balance').innerText = `₹${walletBalance.toFixed(2)}`; }
-async function fetchOrders() { 
+function updateWalletUI() {
+    document.getElementById('wallet-balance').innerText = `₹${walletBalance.toFixed(2)}`;
+}
+
+function updateUserUI() {
+    // Update wallet display with user name
+    const walletDisplay = document.getElementById('wallet-display');
+
+    // Add logout button to navbar
+    const navRightSection = document.querySelector('.flex.items-center.gap-4.shrink-0');
+
+    // Check if logout button doesn't exist yet
+    if (!document.getElementById('user-info-btn')) {
+        const userInfoBtn = document.createElement('button');
+        userInfoBtn.id = 'user-info-btn';
+        userInfoBtn.className = 'hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 transition';
+        userInfoBtn.innerHTML = `<i class="fa-solid fa-user"></i> ${currentUser.username}`;
+
+        const logoutBtn = document.createElement('button');
+        logoutBtn.id = 'logout-btn';
+        logoutBtn.className = 'hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-500/20 hover:bg-red-500 border border-red-500/50 text-xs font-semibold text-red-300 hover:text-white transition';
+        logoutBtn.innerHTML = `<i class="fa-solid fa-sign-out-alt"></i> Logout`;
+        logoutBtn.onclick = handleLogout;
+
+        // Insert before wallet display
+        navRightSection.insertBefore(logoutBtn, walletDisplay);
+        navRightSection.insertBefore(userInfoBtn, logoutBtn);
+    }
+
+    // If guest mode, show a badge
+    if (currentUser.isGuest) {
+        const guestBadge = document.createElement('span');
+        guestBadge.className = 'text-xs text-orange-400 font-semibold';
+        guestBadge.innerText = '(Guest)';
+        document.getElementById('user-info-btn').appendChild(guestBadge);
+    }
+}
+
+function handleLogout() {
+    if (confirm('Are you sure you want to logout?')) {
+        localStorage.removeItem('currentUser');
+        window.location.href = 'login.html';
+    }
+}
+async function fetchOrders() {
     try {
         const response = await fetch(`${API_URL}/orders`);
         const orders = await response.json();
-        
+
+        // Filter orders by status
+        const newOrders = orders.filter(o => o.status === 'new');
+        const cookingOrders = orders.filter(o => o.status === 'cooking');
+        const readyOrders = orders.filter(o => o.status === 'ready');
+
+        // Update statistics
+        if (document.getElementById('stats-new')) {
+            document.getElementById('stats-new').innerText = newOrders.length;
+            document.getElementById('stats-cooking').innerText = cookingOrders.length;
+            document.getElementById('stats-ready').innerText = readyOrders.length;
+        }
+
         // --- ADMIN RENDER LOGIC ---
         const cols = {
             new: document.getElementById('col-new'),
             cooking: document.getElementById('col-cooking'),
             ready: document.getElementById('col-ready')
         };
-        Object.values(cols).forEach(el => el.innerHTML = '');
+
+        Object.values(cols).forEach(el => {
+            if (el) el.innerHTML = '';
+        });
 
         orders.forEach(order => {
-             // ... (Keep existing Admin Card Logic or Paste it here if missing)
-             if (!cols[order.status]) return;
-             const ticket = document.createElement('div');
-             ticket.className = "bg-slate-800/50 p-4 rounded-xl border border-white/5 mb-3";
-             
-             let btn = '';
-             if(order.status === 'new') btn = `<button onclick="updateStatus(${order.id}, 'cooking')" class="w-full mt-2 py-1 bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white text-xs rounded transition">Start Cooking</button>`;
-             else if(order.status === 'cooking') btn = `<button onclick="updateStatus(${order.id}, 'ready')" class="w-full mt-2 py-1 bg-orange-600/20 hover:bg-orange-600 text-orange-300 hover:text-white text-xs rounded transition">Mark Ready</button>`;
-             else btn = `<button onclick="updateStatus(${order.id}, 'completed')" class="w-full mt-2 py-1 bg-green-600/20 hover:bg-green-600 text-green-300 hover:text-white text-xs rounded transition">Complete</button>`;
+            if (!cols[order.status]) return;
 
-             ticket.innerHTML = `
-                <div class="flex justify-between mb-2"><span class="font-mono text-gray-400">#${order.id}</span><span class="text-xs text-gray-500">${new Date(order.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span></div>
-                <div class="text-sm font-bold text-white">₹${order.total_amount}</div>
-                <div class="mt-2 text-xs text-gray-400">${order.user_name}</div>
+            const ticket = document.createElement('div');
+            ticket.className = "bg-slate-800/50 p-4 rounded-xl border border-white/5 hover:border-white/10 transition-all";
+
+            // Calculate time since order
+            const orderTime = new Date(order.created_at);
+            const now = new Date();
+            const diffMinutes = Math.floor((now - orderTime) / 60000);
+            const timeAgo = diffMinutes < 1 ? 'Just now' : `${diffMinutes}m ago`;
+
+            let btn = '';
+            let statusBadge = '';
+
+            if (order.status === 'new') {
+                btn = `<button onclick="updateStatus(${order.id}, 'cooking')" class="w-full mt-3 py-2 bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white text-sm font-semibold rounded-lg transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-play"></i> Start Cooking
+                </button>`;
+                statusBadge = '<span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-full">NEW</span>';
+            } else if (order.status === 'cooking') {
+                btn = `<button onclick="updateStatus(${order.id}, 'ready')" class="w-full mt-3 py-2 bg-orange-600/20 hover:bg-orange-600 text-orange-300 hover:text-white text-sm font-semibold rounded-lg transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-check"></i> Mark Ready
+                </button>`;
+                statusBadge = '<span class="px-2 py-1 bg-orange-500/20 text-orange-400 text-xs font-bold rounded-full animate-pulse">COOKING</span>';
+            } else {
+                btn = `<button onclick="updateStatus(${order.id}, 'completed')" class="w-full mt-3 py-2 bg-green-600/20 hover:bg-green-600 text-green-300 hover:text-white text-sm font-semibold rounded-lg transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-circle-check"></i> Complete Order
+                </button>`;
+                statusBadge = '<span class="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded-full">READY</span>';
+            }
+
+            ticket.innerHTML = `
+                <div class="flex justify-between items-center mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="font-mono text-lg font-bold text-white">#${order.id}</span>
+                        ${statusBadge}
+                    </div>
+                    <span class="text-xs text-gray-500 font-medium">${timeAgo}</span>
+                </div>
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-400">Total Amount</span>
+                    <span class="text-xl font-bold text-white">₹${order.total_amount}</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-gray-400 mb-1">
+                    <i class="fa-solid fa-user"></i>
+                    <span>${order.user_name || 'Guest'}</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-gray-500">
+                    <i class="fa-regular fa-clock"></i>
+                    <span>${new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
                 ${btn}
-             `;
-             cols[order.status].appendChild(ticket);
+            `;
+
+            cols[order.status].appendChild(ticket);
         });
-    } catch(e) {}
+
+        // Show empty states
+        Object.keys(cols).forEach(status => {
+            if (cols[status] && cols[status].children.length === 0) {
+                cols[status].innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full text-gray-500 opacity-50">
+                        <i class="fa-solid fa-inbox text-4xl mb-2"></i>
+                        <p class="text-sm">No ${status} orders</p>
+                    </div>
+                `;
+            }
+        });
+    } catch (e) {
+        console.error('Error fetching orders:', e);
+    }
 }
 
 window.updateStatus = async (id, status) => {

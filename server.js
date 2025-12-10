@@ -36,6 +36,65 @@ db.connect(err => {
 
 // --- API ROUTES ---
 
+// 0. Authentication - Login
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: "Username and password required" });
+    }
+
+    const sql = "SELECT id, username, phone, wallet_balance, is_admin FROM users WHERE username = ? AND password = ?";
+
+    db.query(sql, [username, password], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ error: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.status(401).json({ error: "Invalid username or password" });
+        }
+
+        const user = results[0];
+        res.json({
+            message: "Login successful",
+            user: {
+                id: user.id,
+                username: user.username,
+                phone: user.phone,
+                wallet_balance: user.wallet_balance,
+                is_admin: user.is_admin
+            }
+        });
+    });
+});
+
+// Get user wallet balance
+app.get('/api/users/:username/wallet', (req, res) => {
+    const { username } = req.params;
+
+    const sql = "SELECT wallet_balance FROM users WHERE username = ?";
+    db.query(sql, [username], (err, results) => {
+        if (err) return res.status(500).json(err);
+        if (results.length === 0) return res.status(404).json({ error: "User not found" });
+
+        res.json({ wallet_balance: results[0].wallet_balance });
+    });
+});
+
+// Update user wallet balance
+app.put('/api/users/:username/wallet', (req, res) => {
+    const { username } = req.params;
+    const { amount } = req.body;
+
+    const sql = "UPDATE users SET wallet_balance = ? WHERE username = ?";
+    db.query(sql, [amount, username], (err, result) => {
+        if (err) return res.status(500).json(err);
+        res.json({ message: "Wallet updated", balance: amount });
+    });
+});
+
 // 1. Get Menu (Forgiving Join)
 app.get('/api/menu', (req, res) => {
     const { search } = req.query;
@@ -61,35 +120,140 @@ app.get('/api/menu', (req, res) => {
 
 // 2. Place Order
 app.post('/api/orders', (req, res) => {
-    const { userName, total, items } = req.body;
-    
-    // Note: In production, use a Transaction for data integrity
-    const sql = "INSERT INTO orders (user_id, total_amount, status) VALUES ((SELECT id FROM users WHERE username = ? LIMIT 1), ?, 'new')";
-    
-    db.query(sql, [userName, total], (err, result) => {
-        if (err) {
-            console.error(err);
-            return res.status(500).json({ error: "Order failed. Does user exist?" });
-        }
-        res.json({ message: "Order Placed", orderId: result.insertId });
+    const { userName, total, items, guestInfo } = req.body;
+
+    // Handle guest orders
+    if (userName === 'guest' || !userName) {
+        // For guest users, use a default guest user or create orders without user_id
+        const sql = "INSERT INTO orders (user_id, total_amount, status, user_name) VALUES (NULL, ?, 'new', ?)";
+        const guestName = guestInfo ? guestInfo.name : 'Guest User';
+
+        db.query(sql, [total, guestName], (err, result) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ error: "Order failed" });
+            }
+            res.json({ message: "Order Placed", orderId: result.insertId });
+        });
+    } else {
+        // For logged-in users
+        const sql = "INSERT INTO orders (user_id, total_amount, status) VALUES ((SELECT id FROM users WHERE username = ? LIMIT 1), ?, 'new')";
+
+        db.query(sql, [userName, total], (err, result) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ error: "Order failed. Does user exist?" });
+            }
+            res.json({ message: "Order Placed", orderId: result.insertId });
+        });
+    }
+});
+
+// 3. Get Revenue Statistics (BEFORE /api/orders)
+app.get('/api/revenue', (req, res) => {
+    const queries = {
+        today: `
+            SELECT COALESCE(SUM(total_amount), 0) as revenue, COUNT(*) as count
+            FROM orders
+            WHERE DATE(created_at) = CURDATE() AND status = 'completed'
+        `,
+        week: `
+            SELECT COALESCE(SUM(total_amount), 0) as revenue
+            FROM orders
+            WHERE YEARWEEK(created_at, 1) = YEARWEEK(CURDATE(), 1) AND status = 'completed'
+        `,
+        month: `
+            SELECT COALESCE(SUM(total_amount), 0) as revenue
+            FROM orders
+            WHERE YEAR(created_at) = YEAR(CURDATE()) AND MONTH(created_at) = MONTH(CURDATE()) AND status = 'completed'
+        `
+    };
+
+    const results = {};
+
+    db.query(queries.today, (err, todayData) => {
+        if (err) return res.status(500).json(err);
+        results.today = todayData[0].revenue;
+        results.todayCount = todayData[0].count;
+
+        db.query(queries.week, (err, weekData) => {
+            if (err) return res.status(500).json(err);
+            results.week = weekData[0].revenue;
+
+            db.query(queries.month, (err, monthData) => {
+                if (err) return res.status(500).json(err);
+                results.month = monthData[0].revenue;
+
+                res.json(results);
+            });
+        });
     });
 });
 
-// 3. Get Orders
+// 4. Get All Orders with Pagination and Search (BEFORE /api/orders)
+app.get('/api/orders/all', (req, res) => {
+    const { page = 1, limit = 20, search = '' } = req.query;
+    const offset = (page - 1) * limit;
+
+    let sql = `
+        SELECT o.id, o.total_amount, o.status, o.created_at,
+               COALESCE(u.username, o.user_name, 'Guest') as user_name
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.id
+        WHERE 1=1
+    `;
+
+    const params = [];
+
+    if (search) {
+        sql += ` AND (o.id LIKE ? OR COALESCE(u.username, o.user_name, 'Guest') LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`);
+    }
+
+    // Get total count - build separate count query
+    const countSql = `
+        SELECT COUNT(*) as total
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.id
+        WHERE 1=1
+    ` + (search ? ` AND (o.id LIKE ? OR COALESCE(u.username, o.user_name, 'Guest') LIKE ?)` : '');
+
+    db.query(countSql, search ? params : [], (err, countResult) => {
+        if (err) return res.status(500).json(err);
+        const total = countResult[0].total;
+
+        // Get paginated results
+        sql += ` ORDER BY o.created_at DESC LIMIT ? OFFSET ?`;
+        params.push(parseInt(limit), parseInt(offset));
+
+        db.query(sql, params, (err, results) => {
+            if (err) return res.status(500).json(err);
+            res.json({
+                orders: results,
+                total: total,
+                page: parseInt(page),
+                totalPages: Math.ceil(total / parseInt(limit))
+            });
+        });
+    });
+});
+
+// 5. Get Orders (for live order display)
 app.get('/api/orders', (req, res) => {
     const sql = `
-        SELECT o.id, o.total_amount, o.status, o.created_at, u.username as user_name 
-        FROM orders o 
-        LEFT JOIN users u ON o.user_id = u.id 
+        SELECT o.id, o.total_amount, o.status, o.created_at,
+               COALESCE(u.username, o.user_name, 'Guest') as user_name
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.id
         ORDER BY o.created_at DESC`;
-        
+
     db.query(sql, (err, results) => {
         if (err) return res.status(500).json(err);
         res.json(results);
     });
 });
 
-// 4. Update Status
+// 6. Update Status
 app.put('/api/orders/:id', (req, res) => {
     const { status } = req.body;
     const { id } = req.params;
