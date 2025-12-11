@@ -289,7 +289,7 @@ function setSort(sortType) {
     const label = document.getElementById('sort-label');
     
     label.textContent = sortInfo.label;
-    btn.querySelector('i:first-child').className = `fa-solid ${sortInfo.icon}`;
+    btn.querySelectorAll('i')[0].className = `fa-solid ${sortInfo.icon}`;
     
     renderMenu();
 }
@@ -358,14 +358,18 @@ function updateCartUI() {
     const container = document.getElementById('cart-items');
     const countBadge = document.getElementById('cart-count');
     
-    container.innerHTML = '';
     let total = 0;
     let count = 0;
 
     if (cart.length === 0) {
         container.innerHTML = '<div class="flex flex-col items-center justify-center h-full text-slate-500"><i class="fa-solid fa-basket-shopping text-4xl mb-3 opacity-20"></i><p>Tray is empty</p></div>';
+        countBadge.innerText = '0';
+        countBadge.style.display = 'none';
+        document.getElementById('cart-total').innerText = '₹0';
+        return;
     }
 
+    container.innerHTML = '';
     cart.forEach(item => {
         total += item.price * item.qty;
         count += item.qty;

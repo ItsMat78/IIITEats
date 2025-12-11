@@ -1,0 +1,1101 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{url}
+
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    frame=single,
+    showstringspaces=false,
+    commentstyle=\color{gray},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red}
+}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{IIITEats: A Real-Time Kitchen Display System for Campus Food Ordering}
+
+\author{\IEEEauthorblockN{Shreyash Rai}
+\IEEEauthorblockA{\textit{International Institute of Information Technology} \\
+Naya Raipur, India \\
+shreyash24102@iiitnr.ac.in}
+\and
+\IEEEauthorblockN{Sameer Choudhary}
+\IEEEauthorblockA{\textit{International Institute of Information Technology} \\
+Naya Raipur, India \\
+sameer24102@iiitnr.ac.in}
+}
+
+\maketitle
+
+\begin{abstract}
+IIITEats is a web-based food ordering system built for campus cafeterias. Students order food through a customer portal, and kitchen staff manage orders through an admin dashboard. The system handles guest users and registered accounts, tracks orders in real-time, and calculates revenue across different time periods. We built it using Node.js, Express.js, and MySQL. The paper explains the architecture, describes how we solved key technical problems, and discusses what we learned building a full-stack web application.
+\end{abstract}
+
+\begin{IEEEkeywords}
+food ordering system, kitchen display, web application, Node.js, MySQL, real-time updates, role-based access
+\end{IEEEkeywords}
+
+\section{Introduction}
+Campus cafeterias serve hundreds of students daily. Traditional paper-based or verbal ordering creates problems: orders get mixed up, students can't track their food, and staff struggle to manage rush hours. We built IIITEats to fix these issues.
+
+\subsection{The Problem}
+Current systems fail in several ways:
+\begin{itemize}
+    \item Orders get lost or misheard
+    \item No way to check order status
+    \item Hard to track inventory
+    \item No data on sales or revenue
+    \item System breaks down during peak hours
+\end{itemize}
+
+\subsection{What We Built}
+Our goals were simple:
+\begin{enumerate}
+    \item Create an easy-to-use ordering interface
+    \item Build a real-time kitchen display
+    \item Support both logged-in users and guests
+    \item Track revenue automatically
+    \item Keep data consistent
+    \item Handle high order volumes
+\end{enumerate}
+
+\section{System Design}
+
+\subsection{Technology Stack}
+We used standard web technologies:
+
+\textbf{Frontend:}
+\begin{itemize}
+    \item HTML5 for structure
+    \item Tailwind CSS for styling
+    \item JavaScript for interactions
+    \item Font Awesome for icons
+\end{itemize}
+
+\textbf{Backend:}
+\begin{itemize}
+    \item Node.js runtime
+    \item Express.js framework
+    \item RESTful APIs
+    \item CORS for cross-origin requests
+\end{itemize}
+
+\textbf{Database:}
+\begin{itemize}
+    \item MySQL 8.0
+    \item mysql2 driver
+    \item dotenv for configuration
+\end{itemize}
+
+\subsection{Database Schema}
+Five tables store all data:
+
+\textbf{users} - Account information:
+\begin{lstlisting}
+CREATE TABLE users (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    phone VARCHAR(15),
+    wallet_balance DECIMAL(10,2) DEFAULT 0.00,
+    is_admin BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+\end{lstlisting}
+
+\textbf{categories} - Menu organization:
+\begin{lstlisting}
+CREATE TABLE categories (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    description TEXT
+);
+\end{lstlisting}
+
+\textbf{menu\_items} - Food inventory:
+\begin{lstlisting}
+CREATE TABLE menu_items (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    category_id INT,
+    image_url VARCHAR(500),
+    is_available BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (category_id)
+        REFERENCES categories(id)
+);
+\end{lstlisting}
+
+\textbf{orders} - Order tracking:
+\begin{lstlisting}
+CREATE TABLE orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NULL,
+    user_name VARCHAR(100),
+    total_amount DECIMAL(10,2) NOT NULL,
+    status ENUM('new', 'cooking', 'ready',
+                'completed') DEFAULT 'new',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+\end{lstlisting}
+
+\textbf{inventory} - Stock levels:
+\begin{lstlisting}
+CREATE TABLE inventory (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    item_id INT NOT NULL,
+    stock_qty INT DEFAULT 0,
+    FOREIGN KEY (item_id)
+        REFERENCES menu_items(id)
+);
+\end{lstlisting}
+
+\subsection{API Design}
+We built a REST API with these endpoints:
+
+\textbf{Authentication:}
+\begin{itemize}
+    \item POST /api/auth/login
+\end{itemize}
+
+\textbf{Menu:}
+\begin{itemize}
+    \item GET /api/menu?search=\{query\}
+\end{itemize}
+
+\textbf{Orders:}
+\begin{itemize}
+    \item POST /api/orders
+    \item GET /api/orders
+    \item GET /api/orders/all
+    \item PUT /api/orders/:id
+\end{itemize}
+
+\textbf{Analytics:}
+\begin{itemize}
+    \item GET /api/revenue
+\end{itemize}
+
+\textbf{User Management:}
+\begin{itemize}
+    \item GET /api/users/:username/wallet
+    \item PUT /api/users/:username/wallet
+\end{itemize}
+
+\section{Implementation}
+
+\subsection{Authentication}
+We support two modes: registered users and guests.
+
+User login checks credentials:
+\begin{lstlisting}
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    const sql = `SELECT id, username, phone,
+                 wallet_balance, is_admin
+                 FROM users
+                 WHERE username = ? AND password = ?`;
+
+    db.query(sql, [username, password],
+        (err, results) => {
+        if (results.length === 0) {
+            return res.status(401).json({
+                error: "Invalid credentials"
+            });
+        }
+        res.json({
+            message: "Login successful",
+            user: results[0]
+        });
+    });
+});
+\end{lstlisting}
+
+We store session data in localStorage. For production, use HTTP-only cookies and JWT instead.
+
+\subsection{Order Management}
+
+Orders work for both logged-in and guest users:
+\begin{lstlisting}
+app.post('/api/orders', (req, res) => {
+    const { userName, total, items, guestInfo }
+        = req.body;
+
+    if (userName === 'guest' || !userName) {
+        const sql = `INSERT INTO orders
+            (user_id, total_amount, status, user_name)
+            VALUES (NULL, ?, 'new', ?)`;
+        const guestName = guestInfo ?
+            guestInfo.name : 'Guest User';
+
+        db.query(sql, [total, guestName],
+            (err, result) => {
+            res.json({
+                message: "Order Placed",
+                orderId: result.insertId
+            });
+        });
+    } else {
+        const sql = `INSERT INTO orders
+            (user_id, total_amount, status)
+            VALUES ((SELECT id FROM users
+                     WHERE username = ? LIMIT 1),
+                    ?, 'new')`;
+        db.query(sql, [userName, total],
+            (err, result) => {
+            res.json({
+                message: "Order Placed",
+                orderId: result.insertId
+            });
+        });
+    }
+});
+\end{lstlisting}
+
+Orders move through four stages:
+\begin{enumerate}
+    \item \textbf{new} - Just placed
+    \item \textbf{cooking} - Being prepared
+    \item \textbf{ready} - Done, waiting for pickup
+    \item \textbf{completed} - Delivered
+\end{enumerate}
+
+Status updates happen with one click:
+\begin{lstlisting}
+window.updateStatus = async (id, status) => {
+    await fetch(`${API_URL}/orders/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+    });
+    showToast(`Order #${id} moved to ${status}`);
+    fetchOrders();
+}
+\end{lstlisting}
+
+\subsection{Kitchen Display}
+The admin interface shows orders in three columns: new, cooking, and ready. It polls the server every 5 seconds:
+
+\begin{lstlisting}
+async function fetchOrders() {
+    const response = await fetch(`${API_URL}/orders`);
+    const orders = await response.json();
+
+    const newOrders =
+        orders.filter(o => o.status === 'new');
+    const cookingOrders =
+        orders.filter(o => o.status === 'cooking');
+    const readyOrders =
+        orders.filter(o => o.status === 'ready');
+
+    document.getElementById('stats-new')
+        .innerText = newOrders.length;
+    document.getElementById('stats-cooking')
+        .innerText = cookingOrders.length;
+    document.getElementById('stats-ready')
+        .innerText = readyOrders.length;
+
+    renderOrderCards(newOrders, 'col-new');
+    renderOrderCards(cookingOrders, 'col-cooking');
+    renderOrderCards(readyOrders, 'col-ready');
+}
+
+setInterval(fetchOrders, 5000);
+\end{lstlisting}
+
+Each order card shows the order ID, total, customer name, time elapsed, and an action button.
+
+\subsection{Revenue Tracking}
+We calculate revenue for three time periods using MySQL date functions:
+
+\begin{lstlisting}
+app.get('/api/revenue', (req, res) => {
+    const queries = {
+        today: `SELECT COALESCE(SUM(total_amount), 0)
+                    as revenue, COUNT(*) as count
+                FROM orders
+                WHERE DATE(created_at) = CURDATE()
+                  AND status = 'completed'`,
+        week: `SELECT COALESCE(SUM(total_amount), 0)
+                   as revenue
+               FROM orders
+               WHERE YEARWEEK(created_at, 1) =
+                     YEARWEEK(CURDATE(), 1)
+                 AND status = 'completed'`,
+        month: `SELECT COALESCE(SUM(total_amount), 0)
+                    as revenue
+                FROM orders
+                WHERE YEAR(created_at) = YEAR(CURDATE())
+                  AND MONTH(created_at) = MONTH(CURDATE())
+                  AND status = 'completed'`
+    };
+
+    db.query(queries.today, (err, todayData) => {
+        results.today = todayData[0].revenue;
+        results.todayCount = todayData[0].count;
+
+        db.query(queries.week, (err, weekData) => {
+            results.week = weekData[0].revenue;
+
+            db.query(queries.month,
+                (err, monthData) => {
+                results.month = monthData[0].revenue;
+                res.json(results);
+            });
+        });
+    });
+});
+\end{lstlisting}
+
+COALESCE returns zero when no orders exist, preventing NULL values.
+
+\subsection{Pagination and Search}
+Order history loads 20 records at a time:
+
+\begin{lstlisting}
+app.get('/api/orders/all', (req, res) => {
+    const { page = 1, limit = 20, search = '' }
+        = req.query;
+    const offset = (page - 1) * limit;
+
+    let sql = `SELECT o.id, o.total_amount,
+                      o.status, o.created_at,
+                      COALESCE(u.username, o.user_name,
+                               'Guest') as user_name
+               FROM orders o
+               LEFT JOIN users u ON o.user_id = u.id
+               WHERE 1=1`;
+
+    const params = [];
+
+    if (search) {
+        sql += ` AND (o.id LIKE ? OR
+                 COALESCE(u.username, o.user_name,
+                          'Guest') LIKE ?)`;
+        params.push(`%${search}%`, `%${search}%`);
+    }
+
+    const countSql = `SELECT COUNT(*) as total
+                      FROM orders o
+                      LEFT JOIN users u
+                          ON o.user_id = u.id
+                      WHERE 1=1` +
+        (search ? ` AND (o.id LIKE ? OR
+                    COALESCE(u.username, o.user_name,
+                             'Guest') LIKE ?)` : '');
+
+    db.query(countSql,
+        search ? params : [],
+        (err, countResult) => {
+        const total = countResult[0].total;
+
+        sql += ` ORDER BY o.created_at DESC
+                 LIMIT ? OFFSET ?`;
+        params.push(parseInt(limit), parseInt(offset));
+
+        db.query(sql, params, (err, results) => {
+            res.json({
+                orders: results,
+                total: total,
+                page: parseInt(page),
+                totalPages: Math.ceil(total /
+                                      parseInt(limit))
+            });
+        });
+    });
+});
+\end{lstlisting}
+
+Search uses debouncing to reduce server load:
+\begin{lstlisting}
+function handleSearch(e) {
+    clearTimeout(searchTimeout);
+    searchQuery = e.target.value.trim();
+
+    searchTimeout = setTimeout(() => {
+        currentPage = 1;
+        fetchLastOrders();
+    }, 300);
+}
+\end{lstlisting}
+
+\subsection{Access Control}
+Admins access the kitchen display. Regular users see the customer interface. We check the is\_admin flag:
+
+\begin{lstlisting}
+document.addEventListener('DOMContentLoaded', () => {
+    const userData =
+        localStorage.getItem('currentUser');
+
+    if (!userData) {
+        window.location.href = 'login.html';
+        return;
+    }
+
+    currentUser = JSON.parse(userData);
+
+    if (!currentUser.isAdmin) {
+        alert('Access Denied: Admin privileges required');
+        window.location.href = 'index.html';
+        return;
+    }
+
+    fetchOrders();
+    fetchRevenue();
+    fetchLastOrders();
+});
+\end{lstlisting}
+
+\section{User Interface}
+
+\subsection{Customer Interface}
+The ordering page has:
+
+\textbf{Navigation:}
+\begin{itemize}
+    \item Logo and branding
+    \item Login status
+    \item Wallet balance
+    \item Cart icon with count
+\end{itemize}
+
+\textbf{Menu:}
+\begin{itemize}
+    \item Category filter
+    \item Search bar
+    \item Sort options
+    \item Grid layout
+    \item Item cards with images and prices
+\end{itemize}
+
+\textbf{Cart:}
+\begin{itemize}
+    \item Slide-out panel
+    \item Quantity controls
+    \item Live total calculation
+    \item Payment method selection
+    \item Guest name input
+\end{itemize}
+
+\subsection{Admin Interface}
+The kitchen display shows:
+
+\textbf{Revenue Cards:}
+\begin{itemize}
+    \item Large card for today
+    \item Small cards for week and month
+    \item Icons and color coding
+\end{itemize}
+
+\textbf{Order Stats:}
+\begin{itemize}
+    \item Count of new orders
+    \item Count of cooking orders
+    \item Count of ready orders
+\end{itemize}
+
+\textbf{Order Board:}
+\begin{itemize}
+    \item Three columns for order stages
+    \item Fixed height with scrolling
+    \item Action buttons for each order
+    \item Time elapsed display
+\end{itemize}
+
+\textbf{Order History:}
+\begin{itemize}
+    \item Paginated table (20 per page)
+    \item Search by ID or name
+    \item Formatted dates
+    \item Status badges
+\end{itemize}
+
+\subsection{Responsive Design}
+Tailwind CSS handles different screen sizes:
+
+\begin{lstlisting}
+<div class="grid grid-cols-1 md:grid-cols-4
+            gap-4 mb-6">
+    <div class="glass-card rounded-2xl p-6
+                border-l-4 border-emerald-500
+                md:col-span-2">
+        <!-- Revenue card content -->
+    </div>
+</div>
+\end{lstlisting}
+
+Mobile gets single columns. Tablets get two columns. Desktops get the full layout.
+
+\section{Problems We Solved}
+
+\subsection{Route Ordering}
+Express matches routes in definition order. We had /api/orders before /api/orders/all, so requests to /api/orders/all hit the wrong handler.
+
+We reordered the routes:
+\begin{lstlisting}
+app.get('/api/revenue', ...);
+app.get('/api/orders/all', ...);
+app.get('/api/orders', ...);
+\end{lstlisting}
+
+Specific routes go first, generic routes go last.
+
+\subsection{Pagination Bug}
+totalPages returned NULL because limit came from the query string as a string, not a number. Division by a string gives NULL.
+
+We added parseInt:
+\begin{lstlisting}
+totalPages: Math.ceil(total / parseInt(limit))
+\end{lstlisting}
+
+\subsection{Count Query}
+String replacement to build the count query failed because of escaped quotes in the SQL.
+
+We rebuilt the query explicitly:
+\begin{lstlisting}
+const countSql = `
+    SELECT COUNT(*) as total
+    FROM orders o
+    LEFT JOIN users u ON o.user_id = u.id
+    WHERE 1=1
+` + (search ? ` AND (o.id LIKE ? OR
+               COALESCE(u.username, o.user_name,
+                        'Guest') LIKE ?)` : '');
+\end{lstlisting}
+
+\subsection{Guest Orders}
+We wanted guests to order without accounts, but user\_id was a required foreign key.
+
+We made user\_id nullable and added user\_name:
+\begin{lstlisting}
+ALTER TABLE orders
+    MODIFY COLUMN user_id INT NULL;
+ALTER TABLE orders
+    ADD COLUMN user_name VARCHAR(100);
+\end{lstlisting}
+
+COALESCE displays the right name:
+\begin{lstlisting}
+COALESCE(u.username, o.user_name, 'Guest')
+    as user_name
+\end{lstlisting}
+
+\subsection{Layout Overflow}
+Order columns with dynamic heights grew too large and covered the search section.
+
+We set fixed heights:
+\begin{lstlisting}
+<div class="glass-card rounded-2xl p-4
+            flex flex-col"
+     style="height: 500px;">
+    <div id="col-new"
+         class="overflow-y-auto space-y-3 flex-1">
+    </div>
+</div>
+\end{lstlisting}
+
+\section{Testing}
+
+\subsection{Manual Testing}
+We tested:
+
+\textbf{Login:}
+\begin{itemize}
+    \item Valid credentials work
+    \item Invalid credentials fail
+    \item Admin flag works
+    \item Guest mode works
+\end{itemize}
+
+\textbf{Orders:}
+\begin{itemize}
+    \item Adding items to cart
+    \item Changing quantities
+    \item Selecting payment methods
+    \item Placing orders
+    \item Status transitions
+\end{itemize}
+
+\textbf{Revenue:}
+\begin{itemize}
+    \item Daily totals match
+    \item Weekly totals match
+    \item Monthly totals match
+    \item Only completed orders count
+\end{itemize}
+
+\subsection{API Testing}
+We tested endpoints with curl:
+
+\begin{lstlisting}
+curl -s http://localhost:3000/api/revenue
+# Returns: {"today":"2560.00","todayCount":7,
+#           "week":"3030.00","month":"3030.00"}
+
+curl -s "http://localhost:3000/api/orders/all?page=1&limit=5"
+# Returns: {"orders":[...],"total":14,
+#           "page":1,"totalPages":3}
+
+curl -s "http://localhost:3000/api/orders/all?search=Guest"
+# Returns filtered results
+\end{lstlisting}
+
+\subsection{Performance}
+We could add database indexes:
+\begin{lstlisting}
+CREATE INDEX idx_orders_status
+    ON orders(status);
+CREATE INDEX idx_orders_created
+    ON orders(created_at);
+CREATE INDEX idx_menu_category
+    ON menu_items(category_id);
+\end{lstlisting}
+
+Connection pooling would help under load:
+\begin{lstlisting}
+const pool = mysql.createPool({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    connectionLimit: 10
+});
+\end{lstlisting}
+
+Menu items could be cached since they change rarely.
+
+\section{Security}
+
+\subsection{Current State}
+Our prototype prioritizes functionality:
+\begin{itemize}
+    \item Passwords stored as plaintext
+    \item Sessions in localStorage
+    \item Parameterized queries (good)
+    \item CORS enabled for all origins
+\end{itemize}
+
+\subsection{Production Fixes}
+
+\textbf{Hash passwords:}
+\begin{lstlisting}
+const bcrypt = require('bcrypt');
+
+const hashedPassword =
+    await bcrypt.hash(password, 10);
+
+const match = await bcrypt.compare(password,
+                                    hashedPassword);
+\end{lstlisting}
+
+\textbf{Use JWT tokens:}
+\begin{lstlisting}
+const jwt = require('jsonwebtoken');
+
+const token = jwt.sign({
+    userId: user.id,
+    isAdmin: user.is_admin
+}, process.env.JWT_SECRET, {
+    expiresIn: '24h'
+});
+
+function authenticateToken(req, res, next) {
+    const token = req.cookies.token;
+    if (!token) return res.sendStatus(401);
+
+    jwt.verify(token, process.env.JWT_SECRET,
+        (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+}
+\end{lstlisting}
+
+\textbf{Validate input:}
+\begin{lstlisting}
+const { body, validationResult } =
+    require('express-validator');
+
+app.post('/api/orders',
+    body('total').isNumeric(),
+    body('items').isArray(),
+    (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                errors: errors.array()
+            });
+        }
+    }
+);
+\end{lstlisting}
+
+\textbf{Configure CORS:}
+\begin{lstlisting}
+app.use(cors({
+    origin: 'https://iiiTeats.example.com',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE']
+}));
+\end{lstlisting}
+
+\textbf{Rate limiting:}
+\begin{lstlisting}
+const rateLimit = require('express-rate-limit');
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+});
+
+app.use('/api/', apiLimiter);
+\end{lstlisting}
+
+\section{Future Work}
+
+\subsection{WebSockets}
+Replace polling with push notifications:
+\begin{lstlisting}
+const io = require('socket.io')(server);
+
+io.on('connection', (socket) => {
+    socket.on('newOrder', (order) => {
+        io.to('kitchen').emit('orderUpdate', order);
+    });
+
+    socket.on('statusChange', (update) => {
+        io.to(`order-${update.id}`)
+            .emit('statusUpdate', update);
+    });
+});
+\end{lstlisting}
+
+This reduces latency and server load.
+
+\subsection{Track Order Items}
+Add an order\_items table:
+\begin{lstlisting}
+CREATE TABLE order_items (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    item_id INT NOT NULL,
+    quantity INT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (order_id)
+        REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_id)
+        REFERENCES menu_items(id)
+);
+\end{lstlisting}
+
+This enables detailed analytics and inventory deduction.
+
+\subsection{More Analytics}
+Add:
+\begin{itemize}
+    \item Peak hour analysis
+    \item Popular items
+    \item Customer lifetime value
+    \item Revenue forecasting
+    \item Inventory turnover
+    \item Average prep times
+\end{itemize}
+
+\subsection{Mobile App}
+Build native apps with:
+\begin{itemize}
+    \item Push notifications
+    \item Offline cart
+    \item Saved payments
+    \item Order history
+    \item Pickup reminders
+\end{itemize}
+
+\subsection{Payment Integration}
+Add Stripe or similar:
+\begin{lstlisting}
+const stripe = require('stripe')(process.env.STRIPE_SECRET);
+
+app.post('/api/payment/create-intent',
+    async (req, res) => {
+    const paymentIntent =
+        await stripe.paymentIntents.create({
+            amount: req.body.amount * 100,
+            currency: 'inr',
+            metadata: {
+                orderId: req.body.orderId
+            }
+        });
+
+    res.json({
+        clientSecret: paymentIntent.client_secret
+    });
+});
+\end{lstlisting}
+
+\subsection{Smart Inventory}
+Auto-deduct stock and alert on low levels:
+\begin{lstlisting}
+app.post('/api/orders', async (req, res) => {
+    const { items } = req.body;
+
+    await db.beginTransaction();
+
+    try {
+        for (const item of items) {
+            await db.query(
+                `UPDATE inventory
+                 SET stock_qty = stock_qty - ?
+                 WHERE item_id = ?
+                   AND stock_qty >= ?`,
+                [item.quantity, item.id, item.quantity]
+            );
+
+            const [stock] = await db.query(
+                `SELECT stock_qty
+                 FROM inventory
+                 WHERE item_id = ?`,
+                [item.id]
+            );
+
+            if (stock.stock_qty < REORDER_THRESHOLD) {
+                notifyLowStock(item.id);
+            }
+        }
+
+        await db.query('INSERT INTO orders ...');
+        await db.commit();
+        res.json({ message: 'Order placed' });
+    } catch (error) {
+        await db.rollback();
+        res.status(500).json({ error: 'Order failed' });
+    }
+});
+\end{lstlisting}
+
+\subsection{Customer Feedback}
+Add ratings:
+\begin{lstlisting}
+CREATE TABLE reviews (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    rating INT CHECK (rating BETWEEN 1 AND 5),
+    comment TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+);
+\end{lstlisting}
+
+\subsection{Multiple Locations}
+Support multiple cafeterias:
+\begin{lstlisting}
+CREATE TABLE locations (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    address TEXT,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+ALTER TABLE orders
+    ADD COLUMN location_id INT,
+    ADD FOREIGN KEY (location_id)
+        REFERENCES locations(id);
+\end{lstlisting}
+
+\section{Deployment}
+
+\subsection{Environment Setup}
+Use dotenv for config:
+\begin{lstlisting}
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=securepassword
+DB_NAME=iiiTeats
+JWT_SECRET=randomsecretkey
+NODE_ENV=production
+PORT=3000
+\end{lstlisting}
+
+For production, use AWS Secrets Manager or similar.
+
+\subsection{Process Manager}
+Run with PM2:
+\begin{lstlisting}
+npm install pm2 -g
+pm2 start server.js --name "iiiTeats-api"
+pm2 startup
+pm2 save
+pm2 logs iiiTeats-api
+\end{lstlisting}
+
+\subsection{Reverse Proxy}
+Configure Nginx:
+\begin{lstlisting}
+server {
+    listen 80;
+    server_name iiiTeats.example.com;
+
+    location / {
+        root /var/www/iiiTeats;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+\end{lstlisting}
+
+\subsection{SSL Setup}
+Get free certificates:
+\begin{lstlisting}
+apt-get install certbot python3-certbot-nginx
+certbot --nginx -d iiiTeats.example.com
+certbot renew --dry-run
+\end{lstlisting}
+
+\subsection{Backups}
+Automate database backups:
+\begin{lstlisting}
+#!/bin/bash
+
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BACKUP_DIR="/backups/mysql"
+DB_NAME="iiiTeats"
+
+mysqldump -u root -p$DB_PASSWORD $DB_NAME > \
+    $BACKUP_DIR/backup_$TIMESTAMP.sql
+
+find $BACKUP_DIR -name "backup_*.sql" \
+    -mtime +30 -delete
+\end{lstlisting}
+
+Run daily with cron:
+\begin{lstlisting}
+0 2 * * * /usr/local/bin/backup.sh
+\end{lstlisting}
+
+\subsection{Logging}
+Use structured logs:
+\begin{lstlisting}
+const winston = require('winston');
+
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.json(),
+    transports: [
+        new winston.transports.File({
+            filename: 'error.log',
+            level: 'error'
+        }),
+        new winston.transports.File({
+            filename: 'combined.log'
+        })
+    ]
+});
+
+logger.info('Order created', {
+    orderId: result.insertId,
+    userId: user.id
+});
+\end{lstlisting}
+
+\section{What We Learned}
+
+\subsection{Route Order Matters}
+Express matches routes in order. Specific routes must come before generic ones. This bit us hard.
+
+\subsection{Type Coercion}
+JavaScript doesn't convert query parameters automatically. Always use parseInt for math.
+
+\subsection{String Manipulation Breaks}
+Building SQL queries with string replacement is fragile. Construct queries piece by piece instead.
+
+\subsection{Fixed Layouts Work Better}
+Dynamic heights seem flexible but cause overflow issues. Fixed heights with scrolling are more predictable.
+
+\subsection{NULL Handling}
+Making foreign keys nullable lets guests use the system while keeping referential integrity.
+
+\subsection{Polling is Fine}
+WebSockets are better for real-time updates, but polling works fine for prototypes and moderate traffic.
+
+\section{Related Work}
+
+Commercial systems like Zomato, Swiggy, Square, and Toast offer more features but are complex and expensive. Academic projects usually focus on single restaurants.
+
+IIITEats differs by:
+\begin{itemize}
+    \item Focusing on campus needs
+    \item Supporting guests simply
+    \item Integrating ordering and kitchen display
+    \item Being open source
+\end{itemize}
+
+\section{Conclusion}
+
+IIITEats shows how to build a practical food ordering system for campus cafeterias. We created a working system with order management, real-time kitchen display, and revenue analytics using Node.js, Express.js, and MySQL.
+
+What we built:
+\begin{enumerate}
+    \item Ordering interface with cart and payment
+    \item Real-time kitchen display
+    \item Revenue analytics
+    \item Role-based access
+    \item Responsive design
+    \item Guest and user support
+\end{enumerate}
+
+The system works but needs improvements for production: WebSockets for real-time updates, better security, mobile apps, payment integration, and advanced analytics.
+
+We learned practical lessons about web development: route ordering, type handling, database design, responsive layout, and debugging. These lessons apply to similar projects in education, corporate cafeterias, and small restaurants.
+
+\section*{Acknowledgment}
+
+We thank IIIT Naya Raipur for resources and support. Faculty guidance on web architecture and database design was invaluable.
+
+\begin{thebibliography}{00}
+\bibitem{restaurant_tech} K. Smith and J. Johnson, "Digital Transformation in Restaurant Operations: A Survey of Modern Technologies," \textit{Journal of Hospitality Technology}, vol. 12, no. 3, pp. 45-62, 2023.
+
+\bibitem{express_guide} Express.js Documentation Team, "Express Routing Guide," Expressjs.com, 2024.
+
+\bibitem{mysql_optimization} B. Schwartz et al., \textit{High Performance MySQL}, 4th ed. O'Reilly Media, 2021.
+
+\bibitem{node_best} Node.js Foundation, "Node.js Best Practices," Nodejs.org, 2024.
+
+\bibitem{web_security} OWASP Foundation, "OWASP Top Ten," OWASP.org, 2021.
+
+\bibitem{restful_api} R. Fielding, "Architectural Styles and the Design of Network-based Software Architectures," Ph.D. dissertation, UC Irvine, 2000.
+
+\bibitem{responsive_design} E. Marcotte, \textit{Responsive Web Design}, A Book Apart, 2011.
+
+\bibitem{jwt_auth} M. Jones et al., "JSON Web Token (JWT)," RFC 7519, IETF, 2015.
+
+\bibitem{websocket} I. Fette and A. Melnikov, "The WebSocket Protocol," RFC 6455, IETF, 2011.
+
+\bibitem{database_design} C. J. Date, \textit{Database Design and Relational Theory}, 2nd ed. O'Reilly Media, 2019.
+
+\end{thebibliography}
+
+\end{document}
